@@ -49,7 +49,7 @@ const (
 	tagKeyField            = "key"
 	tagValueField          = "value"
 
-	defaultDocCount  = 10000 // the default elasticsearch allowed limit
+	defaultDocCount  = 1000 // Reduced limit to avoid overloading agents.
 	defaultNumTraces = 100
 )
 
@@ -128,10 +128,22 @@ func newSpanReader(p SpanReaderParams) *SpanReader {
 	}
 }
 
+// FetchNext takes a traceID and returns a Trace associated with that traceID
+func (s *SpanReader) FetchNext(ctx context.Context, traceID model.TraceID, fromTime time.Time, from int) (*model.Trace, error) {
+	traces, err := s.multiRead([]string{traceID.String()}, fromTime.Add(-s.maxSpanAge), fromTime, from, from+defaultDocCount)
+	if err != nil {
+		return nil, err
+	}
+	if len(traces) == 0 {
+		return nil, errNoTraces
+	}
+	return traces[0], nil
+}
+
 // GetTrace takes a traceID and returns a Trace associated with that traceID
 func (s *SpanReader) GetTrace(ctx context.Context, traceID model.TraceID) (*model.Trace, error) {
 	currentTime := time.Now()
-	traces, err := s.multiRead([]string{traceID.String()}, currentTime.Add(-s.maxSpanAge), currentTime)
+	traces, err := s.multiRead([]string{traceID.String()}, currentTime.Add(-s.maxSpanAge), currentTime, 0, defaultDocCount)
 	if err != nil {
 		return nil, err
 	}
@@ -219,10 +231,10 @@ func (s *SpanReader) FindTraces(ctx context.Context, traceQuery *spanstore.Trace
 	if err != nil {
 		return nil, err
 	}
-	return s.multiRead(uniqueTraceIDs, traceQuery.StartTimeMin, traceQuery.StartTimeMax)
+	return s.multiRead(uniqueTraceIDs, traceQuery.StartTimeMin, traceQuery.StartTimeMax, 0, defaultDocCount)
 }
 
-func (s *SpanReader) multiRead(traceIDs []string, startTime, endTime time.Time) ([]*model.Trace, error) {
+func (s *SpanReader) multiRead(traceIDs []string, startTime, endTime time.Time, from int, size int) ([]*model.Trace, error) {
 
 	if len(traceIDs) == 0 {
 		return []*model.Trace{}, nil
@@ -249,7 +261,7 @@ func (s *SpanReader) multiRead(traceIDs []string, startTime, endTime time.Time) 
 			if val, ok := searchAfterTime[traceID]; ok {
 				nextTime = val
 			}
-			searchRequests[i] = elastic.NewSearchRequest().IgnoreUnavailable(true).Type(spanType).Source(elastic.NewSearchSource().Query(query).Size(defaultDocCount).Sort("startTime", true).SearchAfter(nextTime))
+			searchRequests[i] = elastic.NewSearchRequest().IgnoreUnavailable(true).Type(spanType).Source(elastic.NewSearchSource().Query(query).From(from).Size(size).Sort("startTime", true).SearchAfter(nextTime))
 		}
 		// set traceIDs to empty
 		traceIDs = nil
