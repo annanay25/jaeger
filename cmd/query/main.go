@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -31,6 +32,8 @@ import (
 	jaegerClientZapLog "github.com/uber/jaeger-client-go/log/zap"
 	"github.com/uber/jaeger-lib/metrics"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/grpclog"
 
 	"github.com/jaegertracing/jaeger/cmd/env"
 	"github.com/jaegertracing/jaeger/cmd/flags"
@@ -145,11 +148,36 @@ func main() {
 			compressHandler := handlers.CompressHandler(r)
 			recoveryHandler := recoveryhandler.NewRecoveryHandler(logger, true)
 
+			// Create GRPC Server.
+			grpcServer := grpc.NewServer()
+
+			// Add logging.
+			grpclog.SetLoggerV2(grpclog.NewLoggerV2(ioutil.Discard, os.Stderr, os.Stderr))
+
+			// Register GRPC Handler.
+			spanReaderGRPC, err := storageFactory.CreateSpanReader()
+			if err != nil {
+				logger.Fatal("Failed to create span reader", zap.Error(err))
+			}
+			spanReaderGRPC = storageMetrics.NewReadMetricsDecorator(spanReaderGRPC, baseFactory.Namespace(metrics.NSOptions{Name: "query-grpc", Tags: nil}))
+			dependencyReaderGRPC, err := storageFactory.CreateDependencyReader()
+			if err != nil {
+				logger.Fatal("Failed to create dependency reader", zap.Error(err))
+			}
+
+			grpcHandler := NewGRPCHandler(spanReaderGRPC, dependencyReaderGRPC, apiHandlerOptions)
+			api_v2.RegisterQueryServiceHandler(grpcServer, grpcHandler)
+
 			go func() {
-				logger.Info("Starting HTTP server", zap.Int("port", queryOpts.Port))
-				if err := http.ListenAndServe(portStr, recoveryHandler(compressHandler)); err != nil {
+				logger.Info("Starting HTTP+GRPC server", zap.Int("port", queryOpts.Port))
+				conn, err := net.Listen("tcp", fmt.Sprintf(":%d", queryOpts.Port))
+				if err != nil {
 					logger.Fatal("Could not launch service", zap.Error(err))
 				}
+
+				// Multiplexed server.
+				// Use CombinedHandler here, which will "reverse-proxy" between HTTP and GRPC backends.
+				srv.Serve(conn, NewCombinedHandler(grpcServer, recoveryHandler(compressHandler)))
 				hc.Set(healthcheck.Unavailable)
 			}()
 
