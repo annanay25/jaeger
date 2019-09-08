@@ -15,15 +15,11 @@
 package throttling
 
 import (
-	"bytes"
 	"errors"
-	"strconv"
 
-	"github.com/opentracing/opentracing-go/ext"
 	constants "github.com/uber/jaeger-client-go"
 
 	"github.com/jaegertracing/jaeger/cmd/agent/app/reporter"
-	"github.com/jaegertracing/jaeger/model"
 	"github.com/jaegertracing/jaeger/pkg/multierror"
 	"github.com/jaegertracing/jaeger/thrift-gen/jaeger"
 	"github.com/jaegertracing/jaeger/thrift-gen/zipkincore"
@@ -62,48 +58,14 @@ func (r *throttlingReporter) EmitBatch(batch *jaeger.Batch) error {
 	clientUUID = tag.GetVStr()
 	var errors []error
 	for _, span := range batch.GetSpans() {
-		if isDebugRoot(span) {
-			const (
-				creditSpent = 1 // One debug root = one credit
-			)
-			if err := r.throttler.Spend(serviceName, clientUUID, span.GetOperationName(), creditSpent); err != nil {
-				errors = append(errors, err)
-			}
+		const (
+			creditSpent = 1 // One root span = one credit
+		)
+		if err := r.throttler.Spend(serviceName, clientUUID, span.GetOperationName(), creditSpent); err != nil {
+			errors = append(errors, err)
 		}
 	}
 	return multierror.Wrap(errors)
-}
-
-// isDebugRoot determines if the span is debug root (the first span in a new
-// debug trace). A debug root span is identified with these criteria:
-// * The span flags bitset contains DebugFlag.
-// * Contains a tag where the key matches JaegerDebugHeader or
-//   matches SamplingPriority. In the latter case, the tag must have a truthy
-//   value to be considered a debug flag.
-func isDebugRoot(span *jaeger.Span) bool {
-	if !model.Flags(span.GetFlags()).IsDebug() {
-		return false
-	}
-	if tag := findTag(span.GetTags(), constants.JaegerDebugHeader); tag != nil {
-		return true
-	}
-	if tag := findTag(span.GetTags(), string(ext.SamplingPriority)); tag != nil {
-		switch tag.GetVType() {
-		case jaeger.TagType_BOOL:
-			return tag.GetVBool()
-		case jaeger.TagType_LONG:
-			return tag.GetVLong() != 0
-		case jaeger.TagType_DOUBLE:
-			return tag.GetVDouble() != 0.0
-		case jaeger.TagType_STRING:
-			value, _ := strconv.ParseInt(tag.GetVStr(), 10, 64)
-			return value != 0
-		case jaeger.TagType_BINARY:
-			binary := tag.GetVBinary()
-			return bytes.IndexFunc(binary, func(b rune) bool { return b != 0 }) != -1
-		}
-	}
-	return false
 }
 
 // findTag finds a tag in an array of tags that matches the given key.

@@ -50,6 +50,8 @@ func newTokenBucket(cfg AccountConfig, timeNow func() time.Time) *tokenBucket {
 
 // updateBalance is a helper function to update the token bucket balance.
 func (t *tokenBucket) updateBalance() {
+	// TODO(annanay25): This is going to be replaced by a mechanism
+	// to contact the collector and ask for a credit refresh.
 	now := t.timeNow()
 	interval := now.Sub(t.lastTick)
 	t.lastTick = now
