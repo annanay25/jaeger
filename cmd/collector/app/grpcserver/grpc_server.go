@@ -75,6 +75,7 @@ func StartGRPCCollector(
 	server *grpc.Server,
 	handler *app.GRPCHandler,
 	samplingStrategy strategystore.StrategyStore,
+	throttlingHandler throttling.Handler,
 	logger *zap.Logger,
 	serveErr func(error),
 ) (net.Addr, error) {
@@ -88,6 +89,9 @@ func StartGRPCCollector(
 
 	api_v2.RegisterCollectorServiceServer(server, handler)
 	api_v2.RegisterSamplingManagerServer(server, sampling.NewGRPCHandler(samplingStrategy))
+
+	// TODO(@annanay25): Register throttling services here
+
 	startServer(server, lis, logger, serveErr)
 	return lis.Addr(), nil
 }
