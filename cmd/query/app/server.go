@@ -79,6 +79,9 @@ func createHTTPServer(querySvc *querysvc.QueryService, queryOpts *QueryOptions, 
 		r = r.PathPrefix(queryOpts.BasePath).Subrouter()
 	}
 
+	fs := http.FileServer(http.Dir("www/swagger-ui"))
+	r.Handle("/swagger-ui/", http.StripPrefix("/swagger-ui", fs))
+
 	apiHandler.RegisterRoutes(r)
 	RegisterStaticHandler(r, logger, queryOpts)
 	var handler http.Handler = r
